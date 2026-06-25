@@ -201,11 +201,8 @@ class UptimeWidget:
         self.root.after(UPDATE_INTERVAL_MS, self._tick)
 
     def _alert(self):
-        # Flash the widget amber for a few seconds
         self._lbl_h.config(fg=self._ALERT)
         self._lbl_m.config(fg=self._ALERT)
-        self.root.after(5000, lambda: self._lbl_h.config(fg=self._FG_HOURS))
-        self.root.after(5000, lambda: self._lbl_m.config(fg=self._FG_MINS))
 
         if self._tray:
             h, rem = divmod(int(self.threshold.total_seconds()), 3600)
