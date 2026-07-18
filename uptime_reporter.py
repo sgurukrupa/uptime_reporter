@@ -34,11 +34,12 @@ def parse_threshold(value: str) -> datetime.timedelta:
     return datetime.timedelta(hours=int(m.group(1) or 0), minutes=int(m.group(2) or 0))
 
 
-def get_todays_boot_time() -> datetime.datetime | None:
+def get_todays_boot_time(skip: int = 0) -> datetime.datetime | None:
+    """Return today's boot time, skipping the `skip` oldest boot events of the day."""
     handle = win32evtlog.OpenEventLog(None, "System")
     flags = win32evtlog.EVENTLOG_BACKWARDS_READ | win32evtlog.EVENTLOG_SEQUENTIAL_READ
     today = datetime.date.today()
-    earliest: datetime.datetime | None = None
+    boots: list[datetime.datetime] = []
     try:
         while True:
             events = win32evtlog.ReadEventLog(handle, flags, 0)
@@ -47,17 +48,18 @@ def get_todays_boot_time() -> datetime.datetime | None:
             for event in events:
                 dt = event.TimeGenerated.replace(tzinfo=None)
                 if dt.date() < today:
-                    return earliest
+                    boots.sort()
+                    return boots[skip] if skip < len(boots) else None
                 eid = event.EventID & 0xFFFF
                 if (
                     (eid in (1, 12) and event.SourceName == "Microsoft-Windows-Kernel-General")
                     or (eid == 1 and event.SourceName == "Microsoft-Windows-Power-Troubleshooter")
                 ):
-                    earliest = dt
-        return earliest
+                    boots.append(dt)
+        boots.sort()
+        return boots[skip] if skip < len(boots) else None
     finally:
         win32evtlog.CloseEventLog(handle)
-    return None
 
 
 def _make_tray_icon() -> Image.Image:
@@ -77,9 +79,10 @@ class UptimeWidget:
     _BORDER = "#334155"
     _ALERT = "#f59e0b"
 
-    def __init__(self, root: tk.Tk, threshold: datetime.timedelta | None):
+    def __init__(self, root: tk.Tk, threshold: datetime.timedelta | None, skip_boots: int = 0):
         self.root = root
         self.threshold = threshold
+        self.skip_boots = skip_boots
         self.notified = False
         self._tray: pystray.Icon | None = None
         self._drag_x = self._drag_y = 0
@@ -181,7 +184,7 @@ class UptimeWidget:
 
     # ------------------------------------------------------------------
     def _tick(self):
-        boot_time = get_todays_boot_time()
+        boot_time = get_todays_boot_time(self.skip_boots)
         if boot_time:
             delta = datetime.datetime.now() - boot_time
             h, rem = divmod(int(delta.total_seconds()), 3600)
@@ -220,10 +223,14 @@ def main():
         "--notify", metavar="THRESHOLD", type=parse_threshold, default=None,
         help="Notify when uptime reaches this value (e.g. 8h, 45m, 2h30m)",
     )
+    parser.add_argument(
+        "--skip-boots", metavar="N", type=int, default=0,
+        help="Skip the N oldest boot events of today (default: 0)",
+    )
     args = parser.parse_args()
 
     root = tk.Tk()
-    widget = UptimeWidget(root, args.notify)
+    widget = UptimeWidget(root, args.notify, args.skip_boots)
 
     tray = pystray.Icon(
         name="uptime",
