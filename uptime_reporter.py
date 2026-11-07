@@ -34,8 +34,14 @@ def parse_threshold(value: str) -> datetime.timedelta:
     return datetime.timedelta(hours=int(m.group(1) or 0), minutes=int(m.group(2) or 0))
 
 
+def _pick_boot(boots: list[datetime.datetime], index: int) -> datetime.datetime | None:
+    """Pick from chronologically sorted boots; negative counts from the end (-1 = latest)."""
+    boots.sort()
+    return boots[index] if -len(boots) <= index < len(boots) else None
+
+
 def get_todays_boot_time(skip: int = 0) -> datetime.datetime | None:
-    """Return today's boot time, skipping the `skip` oldest boot events of the day."""
+    """Return today's boot time at index `skip` (0 = first of the day, -1 = latest)."""
     handle = win32evtlog.OpenEventLog(None, "System")
     flags = win32evtlog.EVENTLOG_BACKWARDS_READ | win32evtlog.EVENTLOG_SEQUENTIAL_READ
     today = datetime.date.today()
@@ -48,16 +54,14 @@ def get_todays_boot_time(skip: int = 0) -> datetime.datetime | None:
             for event in events:
                 dt = event.TimeGenerated.replace(tzinfo=None)
                 if dt.date() < today:
-                    boots.sort()
-                    return boots[skip] if skip < len(boots) else None
+                    return _pick_boot(boots, skip)
                 eid = event.EventID & 0xFFFF
                 if (
                     (eid in (1, 12) and event.SourceName == "Microsoft-Windows-Kernel-General")
                     or (eid == 1 and event.SourceName == "Microsoft-Windows-Power-Troubleshooter")
                 ):
                     boots.append(dt)
-        boots.sort()
-        return boots[skip] if skip < len(boots) else None
+        return _pick_boot(boots, skip)
     finally:
         win32evtlog.CloseEventLog(handle)
 
@@ -225,7 +229,7 @@ def main():
     )
     parser.add_argument(
         "--skip-boots", metavar="N", type=int, default=0,
-        help="Skip the N oldest boot events of today (default: 0)",
+        help="Index of today's boot/wake event to track from: 0 = first (default), 1 = second, -1 = latest",
     )
     args = parser.parse_args()
 
