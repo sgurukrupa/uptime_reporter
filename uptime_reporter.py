@@ -87,6 +87,7 @@ class UptimeWidget:
         self.root = root
         self.threshold = threshold
         self.skip_boots = skip_boots
+        self._boot_time: datetime.datetime | None = None
         self.notified = False
         self._tray: pystray.Icon | None = None
         self._drag_x = self._drag_y = 0
@@ -188,7 +189,11 @@ class UptimeWidget:
 
     # ------------------------------------------------------------------
     def _tick(self):
-        boot_time = get_todays_boot_time(self.skip_boots)
+        # Resolve the start time once; don't re-read the event log on every tick,
+        # so a later wake from sleep doesn't shift the reference point.
+        if self._boot_time is None:
+            self._boot_time = get_todays_boot_time(self.skip_boots)
+        boot_time = self._boot_time
         if boot_time:
             delta = datetime.datetime.now() - boot_time
             h, rem = divmod(int(delta.total_seconds()), 3600)
