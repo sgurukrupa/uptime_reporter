@@ -15,14 +15,19 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import json
+import os
 import re
+from pathlib import Path
 import tkinter as tk
+from tkinter import messagebox
 import win32evtlog
 import pystray
 from PIL import Image, ImageDraw
 
 
 UPDATE_INTERVAL_MS = 60_000
+LOCK_FILE = Path(__file__).with_name("uptime_lock.json")
 
 
 def parse_threshold(value: str) -> datetime.timedelta:
@@ -32,6 +37,28 @@ def parse_threshold(value: str) -> datetime.timedelta:
             f"Invalid threshold '{value}'. Use formats like 8h, 45m, or 2h30m."
         )
     return datetime.timedelta(hours=int(m.group(1) or 0), minutes=int(m.group(2) or 0))
+
+
+def load_locked_boot_time() -> datetime.datetime | None:
+    """Return the start time locked in earlier today, or None if absent/stale/invalid."""
+    try:
+        data = json.loads(LOCK_FILE.read_text(encoding="utf-8"))
+        if data["date"] != datetime.date.today().isoformat():
+            return None
+        return datetime.datetime.fromisoformat(data["boot_time"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def save_locked_boot_time(boot_time: datetime.datetime) -> None:
+    """Lock in today's start time so later runs reuse it regardless of --skip-boots."""
+    data = {"date": datetime.date.today().isoformat(), "boot_time": boot_time.isoformat()}
+    tmp = LOCK_FILE.with_name(LOCK_FILE.name + ".tmp")
+    try:
+        tmp.write_text(json.dumps(data), encoding="utf-8")
+        os.replace(tmp, LOCK_FILE)
+    except OSError:
+        pass
 
 
 def _pick_boot(boots: list[datetime.datetime], index: int) -> datetime.datetime | None:
@@ -132,6 +159,7 @@ class UptimeWidget:
             root, tearoff=0, bg="#1e1e2e", fg="white",
             activebackground="#334155", activeforeground="white",
         )
+        self._menu.add_command(label="Unlock", command=self._unlock)
         self._menu.add_command(label="Quit", command=self._quit)
 
         # self._position_near_clock()
@@ -170,6 +198,20 @@ class UptimeWidget:
     def _show_menu(self, event):
         self._menu.tk_popup(event.x_root, event.y_root)
 
+    def _unlock(self):
+        """Release today's lock (after confirmation); the next launch picks its start event afresh."""
+        if not messagebox.askyesno(
+            "Unlock start time",
+            "Delete today's locked start time?\n\n"
+            "The next launch will pick its start event afresh.",
+            icon="warning", default="no", parent=self.root,
+        ):
+            return
+        try:
+            LOCK_FILE.unlink(missing_ok=True)
+        except OSError:
+            pass
+
     def _quit(self):
         if self._tray:
             self._tray.stop()
@@ -192,7 +234,11 @@ class UptimeWidget:
         # Resolve the start time once; don't re-read the event log on every tick,
         # so a later wake from sleep doesn't shift the reference point.
         if self._boot_time is None:
-            self._boot_time = get_todays_boot_time(self.skip_boots)
+            self._boot_time = load_locked_boot_time()
+            if self._boot_time is None:
+                self._boot_time = get_todays_boot_time(self.skip_boots)
+                if self._boot_time:
+                    save_locked_boot_time(self._boot_time)
         boot_time = self._boot_time
         if boot_time:
             delta = datetime.datetime.now() - boot_time
@@ -234,7 +280,7 @@ def main():
     )
     parser.add_argument(
         "--skip-boots", metavar="N", type=int, default=0,
-        help="Index of today's boot/wake event to track from: 0 = first (default), 1 = second, -1 = latest",
+        help="Index of today's boot/wake event to track from: 0 = first (default), 1 = second, -1 = latest. Ignored once today's start time is locked in (uptime_lock.json)",
     )
     args = parser.parse_args()
 
