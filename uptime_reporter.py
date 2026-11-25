@@ -167,7 +167,7 @@ class UptimeWidget:
             root, tearoff=0, bg="#1e1e2e", fg="white",
             activebackground="#334155", activeforeground="white",
         )
-        self._menu.add_command(label="Unlock", command=self._unlock)
+        self._menu.add_command(label="Reset", command=self._reset)
         self._menu.add_command(label="Quit", command=self._quit)
 
         # self._position_near_clock()
@@ -206,12 +206,15 @@ class UptimeWidget:
     def _show_menu(self, event):
         self._menu.tk_popup(event.x_root, event.y_root)
 
-    def _unlock(self):
-        """Release today's lock (after confirmation); the next launch picks its start event afresh."""
+    def _reset(self):
+        """Release today's lock (after confirmation) and recompute the uptime right away.
+
+        The start event is re-picked using this run's --skip-boots and locked again.
+        """
         if not messagebox.askyesno(
-            "Unlock start time",
-            "Delete today's locked start time?\n\n"
-            "The next launch will pick its start event afresh.",
+            "Reset uptime",
+            "Delete today's locked start time and recalculate the uptime?\n\n"
+            "The start event will be picked afresh and locked again.",
             icon="warning", default="no", parent=self.root,
         ):
             return
@@ -219,6 +222,11 @@ class UptimeWidget:
             LOCK_FILE.unlink(missing_ok=True)
         except OSError:
             pass
+        self._boot_time = None
+        self.notified = False
+        self._lbl_h.config(fg=self._FG_HOURS)
+        self._lbl_m.config(fg=self._FG_MINS)
+        self._update()
 
     def _quit(self):
         if self._tray:
@@ -239,6 +247,10 @@ class UptimeWidget:
 
     # ------------------------------------------------------------------
     def _tick(self):
+        self._update()
+        self.root.after(UPDATE_INTERVAL_MS, self._tick)
+
+    def _update(self):
         # Resolve the start time once; don't re-read the event log on every tick,
         # so a later wake from sleep doesn't shift the reference point.
         if self._boot_time is None:
@@ -263,8 +275,6 @@ class UptimeWidget:
         else:
             self._lbl_h.config(text="N/A")
             self._lbl_m.config(text="")
-
-        self.root.after(UPDATE_INTERVAL_MS, self._tick)
 
     def _alert(self):
         self._lbl_h.config(fg=self._ALERT)
