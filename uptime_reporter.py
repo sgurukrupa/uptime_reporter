@@ -67,12 +67,12 @@ def _pick_boot(boots: list[datetime.datetime], index: int) -> datetime.datetime 
     return boots[index] if -len(boots) <= index < len(boots) else None
 
 
-def get_todays_boot_time(skip: int = 0) -> datetime.datetime | None:
-    """Return today's boot time at index `skip` (0 = first of the day, -1 = latest)."""
+def get_todays_boot_events() -> list[tuple[datetime.datetime, str]]:
+    """Return today's startup/wake events as (time, kind), oldest first."""
     handle = win32evtlog.OpenEventLog(None, "System")
     flags = win32evtlog.EVENTLOG_BACKWARDS_READ | win32evtlog.EVENTLOG_SEQUENTIAL_READ
     today = datetime.date.today()
-    boots: list[datetime.datetime] = []
+    boots: list[tuple[datetime.datetime, str]] = []
     try:
         while True:
             events = win32evtlog.ReadEventLog(handle, flags, 0)
@@ -81,16 +81,24 @@ def get_todays_boot_time(skip: int = 0) -> datetime.datetime | None:
             for event in events:
                 dt = event.TimeGenerated.replace(tzinfo=None)
                 if dt.date() < today:
-                    return _pick_boot(boots, skip)
+                    boots.sort()
+                    return boots
                 eid = event.EventID & 0xFFFF
-                if (
-                    (eid in (1, 12) and event.SourceName == "Microsoft-Windows-Kernel-General")
-                    or (eid == 1 and event.SourceName == "Microsoft-Windows-Power-Troubleshooter")
-                ):
-                    boots.append(dt)
-        return _pick_boot(boots, skip)
+                # Kernel-General ID 1 (system time change) is deliberately excluded: it fires a few
+                # seconds before every "Wake from sleep", so it would double-count each wake.
+                if event.SourceName == "Microsoft-Windows-Kernel-General" and eid == 12:
+                    boots.append((dt, "Startup"))
+                elif event.SourceName == "Microsoft-Windows-Power-Troubleshooter" and eid == 1:
+                    boots.append((dt, "Wake from sleep"))
+        boots.sort()
+        return boots
     finally:
         win32evtlog.CloseEventLog(handle)
+
+
+def get_todays_boot_time(skip: int = 0) -> datetime.datetime | None:
+    """Return today's boot time at index `skip` (0 = first of the day, -1 = latest)."""
+    return _pick_boot([dt for dt, _ in get_todays_boot_events()], skip)
 
 
 def _make_tray_icon() -> Image.Image:
